@@ -16,11 +16,11 @@ from qchemy import _const
 # ================
 
 AtomicSubshell: TypeAlias = tuple[int, int] | np.ndarray
-"""Type representing an atomic subshell.
+"""Atomic subshell.
 
 An atomic subshell is represented as
 a 1D integer array `[n, l]` of shape `(2,)`,
-representing the principal quantum number $n >= 1$
+containing the principal quantum number $n >= 1$
 and azimuthal quantum number $0 <= l < n$
 of the subshell.
 
@@ -33,7 +33,7 @@ Examples
 
 
 AtomicSubshellSequence: TypeAlias = Sequence[AtomicSubshell] | np.ndarray
-"""Type representing a sequence of atomic subshells.
+"""Sequence of atomic subshells.
 
 An atomic subshell sequence is represented as
 a 2D integer array of shape `(num_subshells, 2)`,
@@ -47,7 +47,7 @@ Examples
 
 
 AtomicSubshellElectronConfig: TypeAlias = Sequence[tuple[int, int, int]] | np.ndarray
-"""Type representing an atomic subshell with electron count.
+"""Atomic subshell with electron count.
 
 An atomic subshell with electron count is represented as
 a 1D integer array `[n, l, k]` of shape `(3,)`,
@@ -64,7 +64,7 @@ Examples
 
 
 AtomicElectronConfig: TypeAlias = Sequence[AtomicSubshellElectronConfig] | np.ndarray
-"""Type representing an atomic electron configuration.
+"""Atomic electron configuration.
 
 An electron configuration is represented as
 a 2D array of shape `(num_subshells, 3)`,
@@ -509,7 +509,7 @@ def to_latex(
     abbreviate: bool = True,
     *,
     template: str = "{n}{l}^{k}",
-    template_high_l: str = "{n}l_{l}^{k}",
+    template_high_l: str = "{n}({l})^{k}",
     assembler: Callable[[str | None, list[str]], str] | None = None,
     empty: str = "",
 ) -> str:
@@ -524,7 +524,7 @@ def to_latex(
         when possible (e.g., ``[Ne]3s^2 3p^5``).
     template
         Template string for formatting each subshell.
-        The string can contain placeholders `{n}`, `{l}`, and `{k}`.
+        The string should contain placeholders `{n}`, `{l}`, and `{k}`.
     assembler
         Function to assemble the final LaTeX string.
         It takes two arguments:
