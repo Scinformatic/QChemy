@@ -9,6 +9,8 @@ import re
 
 import numpy as np
 
+from qchemy import _const
+
 
 # Type Definitions
 # ================
@@ -75,27 +77,6 @@ Examples
 - A configuration for neon (1s² 2s² 2p⁶) is represented as:
   [(1, 0, 2), (2, 0, 2), (2, 1, 6)]
 """
-
-
-# Constants and Utility Mappings
-# ==============================
-
-_L_TO_LABEL = {0: "s", 1: "p", 2: "d", 3: "f", 4: "g", 5: "h", 6: "i"} | dict(
-    zip(range(7, 7 + (ord('z') - ord('k') + 1)), map(chr, range(ord('k'), ord('z') + 1)))
-)
-
-_LABEL_TO_L = {v: k for k, v in _L_TO_LABEL.items()}
-
-_NOBLE_GASES: list[tuple[int, str]] = [
-    (2, "He"),
-    (10, "Ne"),
-    (18, "Ar"),
-    (36, "Kr"),
-    (54, "Xe"),
-    (86, "Rn"),
-    (118, "Og"),
-]
-"""List of noble gases as (number of electrons, symbol) pairs."""
 
 
 # Caches
@@ -201,9 +182,9 @@ def from_string(
             raise ValueError(f"Invalid token: {tok}")
         n = int(m.group(1))
         letter = m.group(2).lower()
-        if letter not in _LABEL_TO_L:
+        if letter not in _const.LABEL_TO_L:
             raise ValueError(f"Unsupported subshell letter in token: {tok}")
-        l = _LABEL_TO_L[letter]
+        l = _const.LABEL_TO_L[letter]
         occ = int(m.group(3))
         out.append([n, l, occ])
     return np.array(out, dtype=int)
@@ -575,7 +556,7 @@ def to_latex(
         parts: list[str] = []
         occupied = cfg[cfg[:, 2] > 0]
         for n, l, k in aufbau_sort(occupied):
-            l_label = _L_TO_LABEL.get(l)
+            l_label = _const.L_TO_LABEL.get(l)
             templ = template_high_l if l_label else template
             part = templ.format(n=n, l=l_label or l, k=k)
             parts.append(part)
@@ -590,7 +571,7 @@ def to_latex(
         return _fmt(None, config)
 
     # Try noble-gas abbreviation
-    eligible = [ng for ng in _NOBLE_GASES if ng[0] < n_electrons]
+    eligible = [ng for ng in _const.NOBLE_GASES if ng[0] < n_electrons]
     if not eligible:
         return _fmt(None, config)
 
