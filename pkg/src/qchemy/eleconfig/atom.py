@@ -133,7 +133,7 @@ def ground_state_aufbau(n_electrons: int) -> AtomicElectronConfig:
         max_n_plus_l += 1
 
     # Fill subshells
-    config: list[list[int, int, int]] = []  # (n, l, k)
+    config: list[tuple[int, int, int]] = []  # (n, l, k)
     remaining = n_electrons
     for n, l in aufbau_sequence(max_n_plus_l):
         if remaining <= 0:
@@ -141,7 +141,7 @@ def ground_state_aufbau(n_electrons: int) -> AtomicElectronConfig:
         cap = subshell_capacity(l)
         put = min(cap, remaining)
         if put > 0:
-            config.append([n, l, put])
+            config.append((n, l, put))
             remaining -= put
 
     return np.array(config, dtype=int)
@@ -149,45 +149,126 @@ def ground_state_aufbau(n_electrons: int) -> AtomicElectronConfig:
 
 def from_string(
     config: str,
-    regex: str = r"^(\d+)([spdfghiklmnopqrstuvwxyzSPDFGHIKLMNOPQRSTUVWXYZ])(\d+)$",
+    aufbau_order: bool = True,
+    *,
+    regex_ng: str = r"^\s*\[\s*([A-Za-z]{1,2})\s*\]",
+    regex_config: str = r"""
+        (?P<n>\d+)
+        (?P<l>[spdfghiklmnopqrstuvwxyzSPDFGHIKLMNOPQRSTUVWXYZ])
+        (?:
+            \^\{\s*(?P<k_braced>\d+)\s*\}   # ^{k}
+        | \^(?P<k_hat>\d+)                  # ^k
+        | (?P<k_plain>\d+)                  # k
+        )
+    """
 ) -> AtomicElectronConfig:
-    """Parse an electron configuration from a string.
+    """Parse an electron configuration string.
 
     Parameters
     ----------
     config
-        Electron configuration string, e.g., "1s2 2s2 2p6 3s2 3p4".
-    regex
-        Regular expression pattern to parse each token.
-        The pattern must contain three capturing groups:
-        1. Principal quantum number `n` (integer).
-        2. Subshell letter (string).
-        3. Number of electrons `k` (integer).
+        Electron configuration string.
+        Handles:
+        - Plain tokens: ``1s2 2s2 2p6``
+        - Superscripts: ``2p^6``, ``2p^{6}``
+        - Noble-gas abbreviations: ``[He] 2s2 2p5``, ``[Ne]3s^{2}3p^{5}``
+        - Light LaTeX wrappers: ``$\\mathrm{[Ne] 3s^{2} 3p^{5}}$``
+    aufbau_order
+        Whether to return the resulting configuration in aufbau order.
+        If False, the order of subshells follows their appearance
+        in the input string.
+    regex_ng
+        Regular expression pattern to identify a leading noble-gas core.
+        The pattern must contain one capturing group for the noble gas symbol.
+    regex_config
+        Regular expression pattern to parse each subshell token.
+        The pattern must contain three named capturing groups that start with:
+        - `n`: Principal quantum number (integer).
+        - `l`: Subshell letter (string).
+        - `k`: Number of electrons (integer).
+        You can use multiple named groups for each component
+        (e.g., `k_braced`, `k_hat`, `k_plain`);
+        the first non-empty group found will be used.
 
     Returns
     -------
     Electron configuration as an `AtomicElectronConfig` array.
-    The subshells are in the order they appear in the input string.
 
     Raises
     ------
     ValueError
-        If a token is malformed or references an unknown subshell letter.
+        If a token is malformed, references an unknown subshell letter,
+        or the resulting configuration violates capacity/quantum rules.
+
+    Notes
+    -----
+    - If a leading noble-gas core is present, it is expanded using
+      `ground_state_aufbau` and then the remainder tokens are added on top.
+    - If a token repeats a subshell, electron counts are **added**.
+    - Final validation ensures ``0 ≤ k ≤ 2(2l+1)``.
     """
-    pat = re.compile(regex)
-    out: list[list[int, int, int]] = []
-    for tok in config.split():
-        m = pat.match(tok)
+    def _get_first_group(prefix: str):
+        for group_label, group_value in token.items():
+            if group_label.startswith(prefix) and group_value:
+                return group_value
+        raise ValueError(f"No group starting with prefix '{prefix}' found in token: {token}")
+
+    s = _normalize_config_string(config)
+    if not s:
+        return np.array([], dtype=int).reshape(0, 3)
+
+    # Seed with noble-gas core if present
+    base: dict[tuple[int, int], int] = {}
+    m = re.match(regex_ng, s)
+    if m:
+        ng_symbol = m.group(1)
+        if ng_symbol not in _const.NOBLE_GAS_SYMBOL_TO_Z:
+            raise ValueError(f"Unknown noble gas symbol: [{ng_symbol}]")
+        ng_z = _const.NOBLE_GAS_SYMBOL_TO_Z[ng_symbol]
+        ng_econfig = _cache_noble_gas_config.get(ng_z)
+        if ng_econfig is None:
+            ng_econfig = ground_state_aufbau(ng_z)
+            _cache_noble_gas_config[ng_z] = ng_econfig
+        for n, l, k in ng_econfig:
+            base[(int(n), int(l))] = base.get((int(n), int(l)), 0) + int(k)
+        s = s[m.end():].lstrip()  # strip the prefix and any following spaces
+
+    # Parse the rest of the orbital tokens
+    regex_config = re.compile(regex_config, re.VERBOSE if '\n' in regex_config else 0)
+    pos = 0
+    while pos < len(s):
+        # skip whitespace
+        while pos < len(s) and s[pos].isspace():
+            pos += 1
+        if pos >= len(s):
+            break
+        m = regex_config.match(s, pos)
         if not m:
-            raise ValueError(f"Invalid token: {tok}")
-        n = int(m.group(1))
-        letter = m.group(2).lower()
+            raise ValueError(f"Invalid token near: '{s[pos:pos+16]}'")
+        token = m.groupdict()
+        n = int(_get_first_group("n"))
+        letter = _get_first_group("l").lower()
         if letter not in _const.LABEL_TO_L:
-            raise ValueError(f"Unsupported subshell letter in token: {tok}")
+            raise ValueError(f"Unsupported subshell letter in token: {s[pos:m.end()]}")
         l = _const.LABEL_TO_L[letter]
-        occ = int(m.group(3))
-        out.append([n, l, occ])
-    return np.array(out, dtype=int)
+        k = int(_get_first_group("k"))
+        base[(n, l)] = base.get((n, l), 0) + k
+        pos = m.end()
+
+    # Build array and validate
+    if not base:
+        return np.array([], dtype=int).reshape(0, 3)
+
+    arr = np.array([[n, l, k] for (n, l), k in base.items()], dtype=int)
+    # Validate quantum numbers and capacities
+    invalid = is_invalid(arr)
+    if np.any(invalid):
+        raise ValueError(
+            f"Parsed configuration is invalid: violates n/l/k constraints "
+            f"at indices {np.where(invalid)[0]}: {arr}"
+        )
+
+    return aufbau_sort(arr) if aufbau_order else arr
 
 
 def aufbau_sequence(max_nl: int) -> AtomicSubshellSequence:
@@ -329,6 +410,8 @@ def hoao(
 
     Parameters
     ----------
+    config
+        Atomic electron configuration.
     prefer_partial
         Prefer a partially filled subshell over a fully
         occupied one with the same or higher order, if available.
@@ -571,19 +654,47 @@ def to_latex(
         return _fmt(None, config)
 
     # Try noble-gas abbreviation
-    eligible = [ng for ng in _const.NOBLE_GASES if ng[0] < n_electrons]
+    eligible = {z: ng for z, ng in _const.NOBLE_GAS_Z_TO_SYMBOL.items() if z < n_electrons}
     if not eligible:
         return _fmt(None, config)
 
     # Precompute noble-gas core configurations via ground_state
-    for ne_core, symbol in reversed(eligible):
-        core_cfg = _cache_noble_gas_config.get(ne_core)
-        if core_cfg is None:
-            core_cfg = ground_state_aufbau(ne_core)
-            _cache_noble_gas_config[ne_core] = core_cfg
+    for ng_z, ng_symbol in reversed(eligible.items()):
+        ng_config = _cache_noble_gas_config.get(ng_z)
+        if ng_config is None:
+            ng_config = ground_state_aufbau(ng_z)
+            _cache_noble_gas_config[ng_z] = ng_config
         # Check subset: every subshell count in core <= this config
-        is_sub, extras = is_subset(core_cfg, config)
+        is_sub, extras = is_subset(ng_config, config)
         if is_sub:
-            return _fmt(symbol, extras)
+            return _fmt(ng_symbol, extras)
     # If no suitable noble gas core found, return full
     return _fmt(None, config)
+
+
+# Private Functions
+# =================
+
+
+def _normalize_config_string(s: str) -> str:
+    """Normalize a configuration string by stripping light LaTeX and spacing.
+
+    Removes surrounding `$...$`, unwraps a single outer `\\mathrm{...}`,
+    replaces thin spaces (`\\,`, `\\;`, `\\:`) with a normal space, and
+    collapses multiple spaces. Does not attempt to fully parse LaTeX.
+    """
+    s = s.strip()
+    if s.startswith("$") and s.endswith("$"):
+        s = s[1:-1].strip()
+    # unwrap a single outer \mathrm{...}
+    if s.startswith(r"\mathrm{") and s.endswith("}"):
+        s = s[len(r"\mathrm{"):-1].strip()
+    # normalize thin spaces and commas-as-separators
+    s = (s
+         .replace(r"\,", " ")
+         .replace(r"\;", " ")
+         .replace(r"\:", " ")
+         .replace(",", " "))
+    # collapse whitespace
+    s = " ".join(s.split())
+    return s
