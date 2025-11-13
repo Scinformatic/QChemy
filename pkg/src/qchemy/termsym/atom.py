@@ -73,6 +73,7 @@ def from_electron_config(config: AtomicElectronConfig) -> tuple[Terms, np.ndarra
     -------
     terms
         Array of LS terms for the configuration.
+        Terms are sorted according to Hund's rules (lowest to highest energy).
     multiplicities
         Array of occurrence multiplicities corresponding to each term.
 
@@ -102,14 +103,14 @@ def from_electron_config(config: AtomicElectronConfig) -> tuple[Terms, np.ndarra
         total = _convolve_ml_ms(total, dist)
     # Reduce the total (ML,MS) multiplicity table into LS terms
     term_map = _reduce_distribution_to_terms(total)
-    return np.array(list(term_map.keys())), np.array(list(term_map.values()))
+    return hund_sort(np.array(list(term_map.keys())), config=config), np.array(list(term_map.values()))
 
 
 def hund_sort(
     levels: Terms | Levels,
     config: AtomicElectronConfig,
 ) -> Levels:
-    """Sort levels according to Hund's rules.
+    """Sort terms/levels according to Hund's rules.
 
     The function assumes pure LS coupling and does not consider inter-subshell coupling.
 
@@ -117,14 +118,12 @@ def hund_sort(
     ----------
     levels
         Terms/levels to sort.
-        If the input is terms,
-        all possible levels (J values) are generated first for each term.
     config
         Electron configuration corresponding to the terms/levels.
 
     Returns
     -------
-    Levels sorted from *lowest* to *highest* energy according to Hund's rules.
+    Terms/levels sorted from *lowest* to *highest* energy according to Hund's rules.
 
     Notes
     -----
@@ -136,30 +135,33 @@ def hund_sort(
        - If the atom's outermost subshell is **more than half-filled**, then levels with larger $J$ lie lower.
     """
     levels = np.asarray(levels)
-    if levels.shape[1] == 2:
-        # Input is terms; generate all possible levels
-        levels = term_to_levels(levels)
-
-    outermost_shell = hoao(config)
-    if outermost_shell is None:
-        half_filled_or_less = True
-    else:
-        _, l, k = outermost_shell
-        hoao_half_capacity = subshell_capacity(l) / 2
-        half_filled_or_less = k <= hoao_half_capacity
-
     L = levels[:, 0]
     S = levels[:, 1]
-    J = levels[:, 2]
+    if levels.shape[1] == 2:
+        sort_keys = (
+            # Rule 2: descending L
+            -L,
+            # Rule 1: descending S
+            -S,
+        )
+    else:
+        outermost_shell = hoao(config)
+        if outermost_shell is None:
+            half_filled_or_less = True
+        else:
+            _, l, k = outermost_shell
+            hoao_half_capacity = subshell_capacity(l) / 2
+            half_filled_or_less = k <= hoao_half_capacity
 
-    sort_keys = (
-        # Rule 3: J ordering flips depending on filling
-        J if half_filled_or_less else -J,
-        # Rule 2: descending L
-        -L,
-        # Rule 1: descending S
-        -S,
-    )
+        J = levels[:, 2]
+        sort_keys = (
+            # Rule 3: J ordering flips depending on filling
+            J if half_filled_or_less else -J,
+            # Rule 2: descending L
+            -L,
+            # Rule 1: descending S
+            -S,
+        )
     order = np.lexsort(sort_keys)
     return levels[order]
 
